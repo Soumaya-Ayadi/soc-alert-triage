@@ -1,10 +1,10 @@
 # Agent SOC de triage d'alertes : agentique + génératif + explicable
 
-Projet académique : un agent IA qui reçoit des alertes de type Wazuh, les enrichit, les classe
+Un agent IA qui reçoit des alertes de type Wazuh, les enrichit, les classe
 (`incident` / `suspicious` / `false_positive`), les relie à **MITRE ATT&CK**, explique sa décision
 et propose une action de réponse validée par un humain. Il résiste aux **injections de prompt**.
 
-## Les 3 « plus »
+## Points clés
 | Plus | Où |
 |---|---|
 | **1. Explicabilité (XAI)** | `agent.py` : preuves citées, confiance, MITRE, vérification de fidélité (chaque preuve citée doit exister) |
