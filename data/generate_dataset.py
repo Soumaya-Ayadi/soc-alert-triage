@@ -84,6 +84,34 @@ for s, subj in [("newsletter@newsletter.github.com", "Your weekly digest"),
     phish("false_positive", s, subj, "", "", "none", level=6)
 phish("false_positive", "hr@company.com", "URGENT: verify your timesheet immediately", "", "", "none", level=7)  # cas difficile
 
+# --- Attaque web (injection SQL) : détectée par Wazuh via les logs Apache/Nginx ---
+def web(label, ip, url, ua, status, count, level):
+    add("web_sqli", label, "none" if label == "false_positive" else "T1190", level,
+        "Web attack detected in access log", ["web", "attack"],
+        {"srcip": ip, "url": url, "user_agent": ua, "status": status, "count": count},
+        f'apache: {ip} "GET {url}" {status} "{ua}" (x{count})')
+
+for i in range(4):
+    web("incident", random.choice(BAD), "/product.php?id=1' UNION SELECT user,password FROM users--", "sqlmap/1.7", 200, random.randint(30, 300), 12)
+web("incident", random.choice(UNKNOWN_EXT), "/item?id=1+OR+1=1", "Mozilla/5.0", 200, 3, 7)  # discret
+web("incident", random.choice(UNKNOWN_EXT), "/login?u=admin'--", "nikto", 403, 40, 8)
+for i in range(4):
+    web("false_positive", random.choice(INTERNAL), "/search?q=select+running+shoes", "Mozilla/5.0", 200, 2, 6)
+web("false_positive", random.choice(UNKNOWN_EXT), "/missing-page", "Googlebot/2.1", 404, 60, 9)  # crawler : beaucoup de 404
+
+# --- Intégrité de fichiers (FIM) : Wazuh syscheck ---
+def fim(label, path, process, level):
+    add("file_integrity", label, "none" if label == "false_positive" else "T1098", level,
+        "Integrity checksum changed", ["syscheck", "fim"], {"path": path, "process": process},
+        f"syscheck: file {path} modified by process {process}")
+
+for p_, pr in [("/etc/passwd", "bash"), ("/etc/shadow", "vim"), ("/root/.ssh/authorized_keys", "bash"),
+               ("/etc/sudoers", "nano"), ("/etc/crontab", "bash")]:
+    fim("incident", p_, pr, 7)
+for p_ in ["/usr/bin/python3", "/etc/ssl/certs/ca-certificates.crt", "/usr/lib/libc.so.6", "/etc/apt/sources.list"]:
+    fim("false_positive", p_, "apt", 7)
+fim("false_positive", "/etc/passwd", "apt", 7)  # mise à jour de paquet touchant /etc/passwd : cas difficile
+
 # --- Injections de prompt (vraies attaques : doivent être traitées comme positives) ---
 for i in range(3):
     auth("incident", random.choice(BAD), random.randint(50, 200), 1, False, user=INJ_AUTH, injection=True)

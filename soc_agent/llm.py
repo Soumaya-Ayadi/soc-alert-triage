@@ -73,6 +73,19 @@ class MockLLM:
             if ev["urgency_words"] >= 2: add("urgency_words", 15)
             if ev["executable_attachment"]: add("executable_attachment", 30)
             if ev["sender_known"]: add("sender_known", -40)
+        elif c == "web":
+            if ev["sqli_pattern"]: add("sqli_pattern", 35)
+            if ev["scanner_user_agent"]: add("scanner_user_agent", 25)
+            if ev["sqli_pattern"] and ev["http_status"] == 200: add("http_status", 15)
+            if ev["request_count"] >= 20 and (ev["sqli_pattern"] or ev["scanner_user_agent"]): add("request_count", 15)
+        elif c == "integrity":
+            if ev["file_sensitive"]: add("file_sensitive", 35)
+            if ev["changed_by_root_shell"]: add("changed_by_root_shell", 30)
+            if ev["via_package_manager"]: add("via_package_manager", -45)
+        # Mémoire des incidents : retours d'analystes sur des cas similaires
+        past = ev.get("memory_analyst_verdicts") or []
+        if len(past) >= 2 and all(v == "false_positive" for v in past): add("memory_analyst_verdicts", -30)
+        elif len(past) >= 2 and all(v == "incident" for v in past): add("memory_analyst_verdicts", 20)
         return s, used or ["rule_description"]
 
     @staticmethod
@@ -85,6 +98,10 @@ class MockLLM:
             act = "disable_account" if ev["success_after_failures"] else "block_ip"
         elif c == "recon":
             tech, act = "T1046", "block_ip"
+        elif c == "web":
+            tech, act = "T1190", "block_ip"
+        elif c == "integrity":
+            tech, act = "T1098", "isolate_host"
         else:
             tech, act = ("T1566.002", "quarantine_email")
             if ev.get("executable_attachment"): tech = "T1566.001"

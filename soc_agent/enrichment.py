@@ -12,6 +12,10 @@ BRANDS = ["microsoft.com", "google.com", "paypal.com", "amazon.com", "company.co
 KNOWN_SENDERS = {"newsletter.github.com", "company.com", "notifications.linkedin.com", "microsoft.com"}
 BAD_TLDS = (".top", ".xyz", ".click", ".zip", ".work")
 SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "goo.gl")
+SQLI_RX = re.compile(r"(union(\s|\+|%20)+select|or(\s|\+|%20)+1=1|'--|sleep\(|information_schema)", re.I)
+SCANNER_UA = ("sqlmap", "nikto", "nmap", "masscan", "dirbuster")
+SENSITIVE_FILES = ("/etc/passwd", "/etc/shadow", "/etc/sudoers", "authorized_keys", "/etc/crontab")
+PKG_MANAGERS = ("apt", "dpkg", "yum", "dnf")
 URGENCY = ["urgent", "immediately", "verify", "suspended", "password", "action required", "within 24"]
 
 
@@ -31,6 +35,8 @@ def _lookalike(domain: str):
 def _ip_reputation(ip: str) -> int:
     if ip in KNOWN_BAD_IPS:
         return KNOWN_BAD_IPS[ip]
+    if ip in config.EXTRA_BAD_IPS:
+        return 90
     if config.ABUSEIPDB_KEY:
         try:
             r = requests.get("https://api.abuseipdb.com/api/v2/check", timeout=5,
@@ -48,7 +54,9 @@ def enrich(alert: dict) -> dict:
     ev = {"rule_level": rule["level"], "rule_description": rule["description"]}
     ev["category"] = ("authentication" if "authentication_failures" in groups else
                       "recon" if "recon" in groups else
-                      "phishing" if "phishing" in groups else "other")
+                      "phishing" if "phishing" in groups else
+                      "web" if "web" in groups else
+                      "integrity" if "syscheck" in groups else "other")
 
     ip = data.get("srcip")
     if ip:
@@ -76,4 +84,14 @@ def enrich(alert: dict) -> dict:
         subj = data.get("subject", "").lower()
         ev["urgency_words"] = sum(w in subj for w in URGENCY)
         ev["executable_attachment"] = bool(re.search(r"\.(exe|scr|js|vbs|bat|iso)$", data.get("attachment", ""), re.I))
+    elif ev["category"] == "web":
+        ev["sqli_pattern"] = bool(SQLI_RX.search(data.get("url", "")))
+        ev["scanner_user_agent"] = any(u in data.get("user_agent", "").lower() for u in SCANNER_UA)
+        ev["http_status"] = data.get("status", 0)
+        ev["request_count"] = data.get("count", 1)
+    elif ev["category"] == "integrity":
+        path = data.get("path", "")
+        ev["file_sensitive"] = any(f in path for f in SENSITIVE_FILES)
+        ev["via_package_manager"] = data.get("process", "") in PKG_MANAGERS
+        ev["changed_by_root_shell"] = data.get("process", "") in ("bash", "sh", "vim", "nano")
     return ev

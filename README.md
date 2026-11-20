@@ -1,10 +1,10 @@
 # Agent SOC de triage d'alertes : agentique + génératif + explicable
 
-Projet académique : un agent IA qui reçoit des alertes de type Wazuh, les enrichit, les classe
+Un agent IA qui reçoit des alertes de type Wazuh, les enrichit, les classe
 (`incident` / `suspicious` / `false_positive`), les relie à **MITRE ATT&CK**, explique sa décision
 et propose une action de réponse validée par un humain. Il résiste aux **injections de prompt**.
 
-## Les 3 « plus »
+## Points clés
 | Plus | Où |
 |---|---|
 | **1. Explicabilité (XAI)** | `agent.py` : preuves citées, confiance, MITRE, vérification de fidélité (chaque preuve citée doit exister) |
@@ -21,7 +21,7 @@ Alerte SIEM -> garde-fous (détection + sanitisation) -> enrichissement (IP, e-m
 ## Installation
 ```bash
 pip install -r requirements.txt
-python data/generate_dataset.py          # 50 alertes simulées avec vérité terrain
+python data/generate_dataset.py          # 71 alertes simulées avec vérité terrain
 python evaluate.py                       # évaluation (backend mock, sans GPU)
 python demo.py                           # démo attaque par injection : naïf vs protégé
 streamlit run app.py                     # tableau de bord
@@ -39,23 +39,26 @@ python demo.py --backend ollama
 Ses chiffres ne prouvent pas la performance d'un LLM. Les résultats à présenter dans le rapport
 sont ceux obtenus avec `--backend ollama`.
 
-## Brancher un vrai Wazuh (étape bonus)
-Installer Wazuh + une VM victime, simuler un brute force SSH (`hydra` depuis Kali, ou Atomic Red Team),
-récupérer l'alerte depuis `/var/ossec/logs/alerts/alerts.json` ou l'API Wazuh, et la passer à
-`analyze()` : le format utilisé ici est une version simplifiée de ce JSON.
+## Améliorations incluses
+- **Vrai Wazuh** : `docs/GUIDE_WAZUH.md` (installation, agent, brute force avec Hydra) + `wazuh_connector.py` + `analyze_file.py`.
+- **5 scénarios** : brute force SSH, scan de ports, phishing, injection SQL web, modification de fichiers (FIM).
+- **Mémoire des incidents (ChromaDB, local)** : `soc_agent/memory.py`, démo avec `python memory_demo.py`.
+  Les analystes valident des cas ; l'agent retrouve les cas similaires. Seuls des résumés structurés sont stockés, jamais le log brut.
+  Option `MEMORY_EMBED=default` pour des embeddings MiniLM (téléchargés une fois) au lieu du hachage hors-ligne.
 
 ## Structure
 ```
 soc_agent/  config, mitre, guardrails, enrichment, llm, agent, actions
 data/       generate_dataset.py -> alerts.json
-evaluate.py demo.py app.py
+evaluate.py demo.py app.py memory_demo.py wazuh_connector.py analyze_file.py
+docs/       GUIDE_WAZUH.md
 ```
 
-## Limites (à mentionner dans le rapport)
-- Données simulées, petit jeu de test (50 alertes) : les résultats sont indicatifs.
+## Limites
+- Données simulées, petit jeu de test (71 alertes) : les résultats sont indicatifs.
 - Les garde-fous par motifs (regex) ne couvrent pas toutes les injections ; la politique déterministe et l'humain dans la boucle sont la vraie défense.
 - Actions de réponse simulées. Aucune action critique sans validation humaine.
 - Un LLM local de 7-8B peut se tromper sur les sorties structurées : d'où validation du schéma, retry et escalade.
 
 ## Pistes d'amélioration
-Mémoire des incidents passés (ChromaDB), corrélation multi-alertes, connexion TheHive/Shuffle, plus de scénarios.
+Corrélation multi-alertes, connexion TheHive/Shuffle, dataset public (CICIDS2017), boucle de feedback analyste dans le dashboard.

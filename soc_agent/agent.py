@@ -37,7 +37,7 @@ def _valid(d) -> bool:
             and isinstance(d.get("confidence"), (int, float)))
 
 
-def analyze(alert: dict, backend: str = "mock", protected: bool = True) -> dict:
+def analyze(alert: dict, backend: str = "mock", protected: bool = True, memory=None) -> dict:
     t0 = time.time()
     llm = get_llm(backend)
     flags = []
@@ -48,6 +48,11 @@ def analyze(alert: dict, backend: str = "mock", protected: bool = True) -> dict:
             flags.append("prompt_injection_detected")
         raw_log = guardrails.sanitize(raw_log)
     evidence = enrich(alert)
+    similar = []
+    if memory is not None:  # mémoire : cas passés similaires, validés par un analyste
+        similar = memory.similar(evidence)
+        if similar:
+            evidence["memory_analyst_verdicts"] = [c["verdict"] for c in similar]
     prompt = _build_prompt(evidence, raw_log, protected)
 
     out = None
@@ -82,7 +87,7 @@ def analyze(alert: dict, backend: str = "mock", protected: bool = True) -> dict:
         "technique": describe(out["technique_id"]), "reasoning": out["reasoning"],
         "evidence": {k: evidence[k] for k in cited}, "recommended_action": out["recommended_action"],
         "requires_human": requires_human, "flags": flags, "faithful": faithful,
-        "protected": protected, "backend": llm.name, "latency_s": round(time.time() - t0, 3),
+        "protected": protected, "backend": llm.name, "similar_cases": similar, "latency_s": round(time.time() - t0, 3),
     }
     decision["report"] = report(alert, decision)
     return decision
@@ -97,4 +102,6 @@ def report(alert: dict, d: dict) -> str:
             f"- Preuves utilisées :\n{ev}\n- Justification : {d['reasoning']}\n"
             f"- Action recommandée : `{d['recommended_action']}` "
             f"({'validation humaine requise' if d['requires_human'] else 'automatisable'})\n"
-            f"- Alertes de sécurité de l'agent : {', '.join(d['flags']) or 'aucune'}")
+            + "".join(f"- Cas similaire mémorisé : {c['alert_id']} -> {c['verdict']} (similarité {c['similarity']:.0%})\n"
+                      for c in d.get("similar_cases", []))
+            + f"- Alertes de sécurité de l'agent : {', '.join(d['flags']) or 'aucune'}")

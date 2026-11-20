@@ -6,6 +6,8 @@ MITRE = {
     "T1046":     ("Network Service Discovery", "Discovery"),
     "T1566.001": ("Spearphishing Attachment", "Initial Access"),
     "T1566.002": ("Spearphishing Link", "Initial Access"),
+    "T1190":     ("Exploit Public-Facing Application", "Initial Access"),
+    "T1098":     ("Account Manipulation", "Persistence"),
     "none":      ("Aucune technique (faux positif)", "-"),
 }
 
