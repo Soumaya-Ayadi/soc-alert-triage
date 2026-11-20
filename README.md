@@ -51,7 +51,7 @@ data/       generate_dataset.py -> alerts.json
 evaluate.py demo.py app.py
 ```
 
-## Limites (à mentionner dans le rapport)
+## Limites
 - Données simulées, petit jeu de test (50 alertes) : les résultats sont indicatifs.
 - Les garde-fous par motifs (regex) ne couvrent pas toutes les injections ; la politique déterministe et l'humain dans la boucle sont la vraie défense.
 - Actions de réponse simulées. Aucune action critique sans validation humaine.
