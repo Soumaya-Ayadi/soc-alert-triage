@@ -1,76 +1,92 @@
-# Guide : installer Wazuh et générer une vraie alerte (brute force SSH)
+# Guide : Wazuh léger sous WSL + vraie alerte brute force SSH (sans VirtualBox, sans Kali)
 
-> Tout se passe dans un **labo isolé sur ton PC**. N'attaque jamais une machine qui ne t'appartient pas.
+> Labo 100 % local sur ta propre machine. N'attaque jamais une machine qui ne t'appartient pas.
+> Ce guide n'a pas été testé de bout en bout par l'auteur : vérifie les commandes sur documentation.wazuh.com si une étape échoue.
 
-## 0. Matériel
-- PC avec 16 Go de RAM (8 Go possible mais serré), 60 Go de disque, VirtualBox installé.
-- 3 machines virtuelles :
+## 0. Principe et budget mémoire
+Wazuh complet (indexeur + dashboard) est gourmand. Notre agent IA n'a besoin que du **manager** Wazuh,
+qui écrit les alertes dans `/var/ossec/logs/alerts/alerts.json` (~1 à 1,5 Go de RAM). Pas de dashboard, pas de VM.
 
-| VM | OS | RAM | Rôle |
-|---|---|---|---|
-| `wazuh` | Ubuntu Server 22.04 | 4 à 6 Go, 2 CPU | Serveur Wazuh (SIEM + dashboard) |
-| `victime` | Ubuntu Server 22.04 | 1 à 2 Go | Machine surveillée (agent Wazuh + serveur SSH) |
-| `kali` | Kali Linux | 2 Go | Attaquant |
+| Composant | RAM approx. |
+|---|---|
+| WSL2 + Wazuh manager + SSH + Hydra | 2 à 3 Go |
+| Ollama + modèle 3B (`llama3.2:3b`) | 3 à 4 Go |
+| Windows + navigateur | 4 à 5 Go |
 
-Alternative plus rapide : télécharger l'**OVA Wazuh** (VM prête à l'emploi) sur la doc officielle et l'importer dans VirtualBox, ce qui évite l'étape 2.
-
-## 1. Réseau du labo
-Dans VirtualBox : Fichier > Outils > Gestionnaire de réseau > **Réseau NAT** (créer un réseau, ex. `10.0.2.0/24`), puis mettre les 3 VM sur ce réseau.
-Note l'IP de chaque VM avec `ip a`. Vérifie qu'elles se voient (`ping`).
-
-## 2. Installer Wazuh (sur la VM `wazuh`)
-```bash
-curl -sO https://packages.wazuh.com/4.x/wazuh-install.sh
-sudo bash ./wazuh-install.sh -a
+Limite WSL pour éviter qu'il avale toute la RAM : crée `C:\Users\TON_NOM\.wslconfig` :
 ```
-À la fin, le script affiche l'utilisateur `admin` et un **mot de passe : note-le**.
-Ouvre `https://IP_DE_LA_VM_WAZUH` dans le navigateur (avertissement de certificat : normal en labo).
-Vérifie les prérequis et la version actuelle sur documentation.wazuh.com (section Quickstart).
-
-## 3. Installer l'agent sur la VM `victime`
-1. Dashboard Wazuh > **Agents > Deploy new agent**.
-2. Choisis Linux (DEB amd64), saisis l'IP du serveur Wazuh, donne le nom `victime`.
-3. Copie-colle les commandes affichées sur la VM victime (elles installent et démarrent l'agent).
-4. Vérifie que l'agent apparaît **Active** dans le dashboard.
-
-Installe aussi le serveur SSH sur la victime et crée un utilisateur test :
-```bash
-sudo apt install -y openssh-server
-sudo adduser testuser          # mot de passe simple, ex. : password123
+[wsl2]
+memory=5GB
+processors=4
 ```
-Active l'authentification par mot de passe dans `/etc/ssh/sshd_config` (`PasswordAuthentication yes`), puis `sudo systemctl restart ssh`.
+puis `wsl --shutdown` dans PowerShell et relance Ubuntu.
+Astuce : fais tourner Ollama côté Windows et le projet Python côté WSL (ou tout dans WSL si tu préfères).
 
-## 4. Générer une vraie alerte : brute force SSH (depuis `kali`)
+## 1. Installer le manager Wazuh (dans Ubuntu WSL)
 ```bash
-# liste de mots de passe : rockyou est fournie avec Kali
-sudo gunzip /usr/share/wordlists/rockyou.txt.gz
-head -200 /usr/share/wordlists/rockyou.txt > mini.txt     # 200 essais suffisent
-hydra -l testuser -P mini.txt ssh://IP_VICTIME -t 4
+sudo apt update && sudo apt install -y curl gnupg apt-transport-https
+curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH | sudo gpg --no-default-keyring \
+  --keyring gnupg-ring:/usr/share/keyrings/wazuh.gpg --import && sudo chmod 644 /usr/share/keyrings/wazuh.gpg
+echo "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt/ stable main" | sudo tee /etc/apt/sources.list.d/wazuh.list
+sudo apt update && sudo apt install -y wazuh-manager
+sudo /var/ossec/bin/wazuh-control start
+sudo /var/ossec/bin/wazuh-control status      # analysisd et remoted doivent être "running"
 ```
-Dans le dashboard Wazuh > **Threat Hunting / Events** : cherche `sshd`. Tu dois voir des alertes
-« authentication failed » (règle 5760, niveau 5) puis « brute force » (règle 5763, niveau 10).
-Les numéros de règles peuvent varier : repère-les dans ton propre dashboard.
+Le manager surveille aussi la machine locale : **pas besoin de machine victime séparée**.
+(Si `systemctl` ne marche pas, c'est que WSL n'a pas systemd : utilise `wazuh-control`, comme ci-dessus.)
 
-## 5. Brancher l'agent IA sur cette alerte
-Les alertes brutes sont dans `/var/ossec/logs/alerts/alerts.json` **sur la VM `wazuh`** (1 JSON par ligne).
+## 2. Préparer la « victime » : le serveur SSH local
 ```bash
-# depuis ta machine de dev (ou la VM wazuh si tu y mets le projet)
-scp utilisateur@IP_WAZUH:/var/ossec/logs/alerts/alerts.json ./alerts_wazuh.json   # peut demander sudo/chmod
-python wazuh_connector.py --file alerts_wazuh.json --out data/wazuh_alerts.json
-EXTRA_BAD_IPS=IP_KALI python analyze_file.py data/wazuh_alerts.json            # ajoute --backend ollama pour le vrai LLM
+sudo apt install -y openssh-server rsyslog hydra
+sudo adduser testuser                 # mot de passe simple, ex. : password123
+sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+sudo service rsyslog start && sudo service ssh start
+ls /var/log/auth.log                  # doit exister : c'est le fichier que Wazuh lit
 ```
-**Pourquoi `EXTRA_BAD_IPS` ?** Dans le labo, Kali a une IP privée (donc « interne »). On la déclare comme
-connue malveillante, ce qui simule une base de threat intelligence qui l'aurait identifiée.
-Pour une vraie IP publique, utilise `ABUSEIPDB_KEY` (optionnel, appel externe : à éviter si ton prof l'interdit).
+Pour que Wazuh lise ce fichier, vérifie que `/var/ossec/etc/ossec.conf` contient une section `<localfile>`
+pour `/var/log/auth.log` (présente par défaut sur Debian/Ubuntu dans la plupart des versions). Sinon ajoute :
+```xml
+<localfile><log_format>syslog</log_format><location>/var/log/auth.log</location></localfile>
+```
+puis `sudo /var/ossec/bin/wazuh-control restart`.
 
-## 6. Autres scénarios réels dans le labo
-| Scénario | Comment le générer | Détection Wazuh |
+## 3. Générer la vraie attaque (depuis ta propre machine)
+Pas besoin de Kali : Hydra est installé via `apt`.
+```bash
+printf "%s\n" password1 azerty 123456 qwerty admin letmein welcome monkey dragon master \
+  iloveyou sunshine princess football abc123 login starwars hello freedom shadow > mini.txt
+IP=$(hostname -I | awk '{print $1}')
+hydra -l testuser -P mini.txt ssh://$IP -t 4
+sudo tail -f /var/ossec/logs/alerts/alerts.json      # les alertes apparaissent ici
+```
+Cible l'IP de la machine plutôt que `127.0.0.1` : le localhost est parfois traité à part par Wazuh.
+Tu dois voir des échecs d'authentification (règle 5760, niveau 5) puis une alerte de brute force
+(règle 5763, niveau 10). **Les numéros de règles peuvent varier : repère les tiens dans le fichier.**
+Si rien n'apparaît : `sudo tail /var/ossec/logs/ossec.log` (erreurs du manager) et vérifie que `/var/log/auth.log` se remplit.
+
+## 4. Passer l'alerte à l'agent IA
+```bash
+sudo cp /var/ossec/logs/alerts/alerts.json ~/alerts_wazuh.json && sudo chown $USER ~/alerts_wazuh.json
+cd ~/soc-agent
+python wazuh_connector.py --file ~/alerts_wazuh.json --out data/wazuh_alerts.json
+EXTRA_BAD_IPS=$IP python analyze_file.py data/wazuh_alerts.json            # + --backend ollama pour le vrai LLM
+```
+**Pourquoi `EXTRA_BAD_IPS` ?** L'attaque vient d'une IP locale (« interne »). On la déclare connue malveillante
+pour simuler une base de threat intelligence. C'est à expliquer au jury (voir section 6).
+
+## 5. Autres scénarios réels (optionnels, selon le temps)
+| Scénario | Comment | Remarque |
 |---|---|---|
-| **Scan de ports** | `nmap -sS -p- IP_VICTIME` depuis Kali | Pas détecté par défaut : nécessite des logs pare-feu (iptables) ou Suricata |
-| **Injection SQL web** | Installer Apache + une page vulnérable (DVWA), puis `sqlmap -u "http://IP/page?id=1"` | Règles web (logs Apache) |
-| **Modification de fichiers (FIM)** | Sur la victime : `sudo adduser pirate` ou éditer `/etc/passwd` | Module syscheck (FIM) |
-| **Phishing** | Pas natif Wazuh : garde les e-mails simulés ou utilise GoPhish | - |
+| **Modification de fichiers (FIM)** | `sudo adduser pirate` ou éditer `/etc/passwd` | Module syscheck de Wazuh ; la fréquence de scan est configurable (`ossec.conf`) |
+| **Injection SQL web** | Apache + page vulnérable (DVWA) + `sqlmap` | Plus lourd à installer : à garder pour plus tard |
+| **Scan de ports** | `nmap -sS -p- $IP` | Non détecté par défaut (il faut logs pare-feu ou Suricata) |
+| **Phishing** | - | Pas natif Wazuh : reste sur les e-mails simulés |
 
-## 7. Pour la section « limites » du rapport
-Compare l'alerte **réelle** et l'alerte **simulée** : champs manquants, bruit, volume. Le connecteur
-`wazuh_connector.py` est une adaptation minimale : à toi de l'enrichir si tu rencontres d'autres formats.
+## 6. Ce qu'il faut dire en soutenance
+- « Le manager Wazuh tourne sous WSL ; l'attaque brute force est réelle (Hydra), la détection est faite par les règles Wazuh. »
+- « Le connecteur transforme le format Wazuh en preuves pour l'agent. L'IP est déclarée malveillante pour simuler la threat intelligence. »
+- Limites : labo mono-machine, un seul scénario réel, le reste est simulé.
+
+## 7. Plan B si ça ne marche pas après 1 à 2 heures
+Garde le dataset simulé pour la démo en direct et présente Wazuh comme perspective, ou enregistre l'alerte
+réelle dès qu'elle fonctionne une fois et rejoue-la depuis le fichier JSON pendant la soutenance.
